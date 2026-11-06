@@ -1,6 +1,6 @@
 {
   "name": "@gopaljigaur/arcli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Apple Reminders CLI for macOS: list, add, edit and complete reminders from the command line",
   "main": "lib/jxa-runner.js",
   "bin": {
