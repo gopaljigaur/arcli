@@ -1,0 +1,238 @@
+// Shared by every script: access, lookup, dates, and how a reminder is serialised.
+// jxa-runner prepends this file to the named script.
+
+ObjC.import('Foundation');
+ObjC.import('EventKit');
+
+var REMINDER = 1; // EKEntityTypeReminder
+var UNDEFINED = 0x7fffffffffffffff; // NSDateComponentUndefined, as JXA sees it
+
+var DENIED =
+  'Reminders access not granted. Allow your terminal (and/or "osascript") in System Settings > Privacy & Security > Reminders, then run "arcli setup".';
+
+function unwrap(x) {
+  var v = ObjC.unwrap(x);
+  return v === undefined || v === null ? '' : String(v);
+}
+
+function fail(code, message) {
+  return { ok: false, error: { code: code, message: message } };
+}
+
+function ensureAccess(store) {
+  // JXA bridges this enum as a string, so compare numbers.
+  // 0 not determined, 1 restricted, 2 denied, 3 full access, 4 write only.
+  var status = Number($.EKEventStore.authorizationStatusForEntityType(REMINDER));
+  if (status === 3) return { ok: true };
+  if (status === 0) {
+    var done = false;
+    store.requestFullAccessToRemindersWithCompletion(function () { done = true; });
+    // The completion does not always reach this run loop, so watch the status too.
+    var start = $.NSDate.date;
+    while (!done && $.NSDate.date.timeIntervalSinceDate(start) < 60) {
+      $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.1));
+      if (Number($.EKEventStore.authorizationStatusForEntityType(REMINDER)) !== 0) break;
+    }
+    if (Number($.EKEventStore.authorizationStatusForEntityType(REMINDER)) === 3) return { ok: true };
+  }
+  return fail('NOT_AUTHORIZED', DENIED);
+}
+
+function open() {
+  var store = $.EKEventStore.alloc.init;
+  var access = ensureAccess(store);
+  return access.ok ? { ok: true, store: store } : access;
+}
+
+function each(array, fn) {
+  var out = [];
+  for (var i = 0; i < Number(array.count); i++) out.push(fn(array.objectAtIndex(i)));
+  return out;
+}
+
+function lists(store) {
+  return each(store.calendarsForEntityType(REMINDER), function (c) { return c; });
+}
+
+function listInfo(c) {
+  return {
+    id: unwrap(c.calendarIdentifier),
+    name: unwrap(c.title),
+    source: unwrap(c.source.title),
+    writable: !!ObjC.unwrap(c.allowsContentModifications)
+  };
+}
+
+// By id, else by exact name. Errors when a name matches more than one list.
+function findList(store, name, id) {
+  var all = lists(store);
+  var hits = all.filter(function (c) {
+    return id ? unwrap(c.calendarIdentifier) === id : unwrap(c.title) === name;
+  });
+  if (!hits.length) return fail('LIST_NOT_FOUND', id ? 'No list with id ' + id : 'No list named "' + name + '"');
+  if (hits.length > 1) {
+    return fail('AMBIGUOUS_LIST', 'More than one list named "' + name + '". Use --list-id with one of: ' +
+      hits.map(function (c) { return unwrap(c.calendarIdentifier); }).join(', '));
+  }
+  return { ok: true, list: hits[0] };
+}
+
+// Runs an EventKit fetch to completion and returns the reminders as a JS array.
+function fetch(store, predicate) {
+  var done = false;
+  var found = [];
+  store.fetchRemindersMatchingPredicateCompletion(predicate, function (r) {
+    if (r && !r.isNil()) found = each(r, function (x) { return x; });
+    done = true;
+  });
+  var start = $.NSDate.date;
+  while (!done && $.NSDate.date.timeIntervalSinceDate(start) < 30) {
+    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.02));
+  }
+  return found;
+}
+
+function findReminder(store, id) {
+  var r = store.calendarItemWithIdentifier(id);
+  if (!r || r.isNil() || !r.isKindOfClass($.EKReminder)) return fail('REMINDER_NOT_FOUND', 'No reminder with id ' + id);
+  return { ok: true, reminder: r };
+}
+
+function pad(n) {
+  return (n < 10 ? '0' : '') + n;
+}
+
+// Due date components to "YYYY-MM-DD" or "YYYY-MM-DDTHH:mm", local time.
+function dueOf(r) {
+  var c = r.dueDateComponents;
+  if (!c || c.isNil()) return null;
+  var y = Number(c.year);
+  var m = Number(c.month);
+  var d = Number(c.day);
+  var h = Number(c.hour);
+  var min = Number(c.minute);
+  if (y >= UNDEFINED / 2) {
+    // Components without a year still resolve to a date through the calendar.
+    var date = $.NSCalendar.currentCalendar.dateFromComponents(c);
+    if (!date || date.isNil()) return null;
+    var js = new Date(Number(date.timeIntervalSince1970) * 1000);
+    y = js.getFullYear(); m = js.getMonth() + 1; d = js.getDate();
+  }
+  var day = y + '-' + pad(m) + '-' + pad(d);
+  return h >= 0 && h < 24 ? day + 'T' + pad(h) + ':' + pad(min >= 0 && min < 60 ? min : 0) : day;
+}
+
+function isoOf(nsdate) {
+  if (!nsdate || nsdate.isNil()) return null;
+  return new Date(Number(nsdate.timeIntervalSince1970) * 1000).toISOString();
+}
+
+function serialise(r) {
+  var p = Number(r.priority);
+  return {
+    id: unwrap(r.calendarItemIdentifier),
+    title: unwrap(r.title),
+    list: unwrap(r.calendar.title),
+    listId: unwrap(r.calendar.calendarIdentifier),
+    due: dueOf(r),
+    completed: !!ObjC.unwrap(r.completed),
+    completedAt: isoOf(r.completionDate),
+    priority: p === 0 ? 'none' : p < 5 ? 'high' : p === 5 ? 'medium' : 'low',
+    notes: unwrap(r.notes),
+    url: r.URL && !r.URL.isNil() ? unwrap(r.URL.absoluteString) : '',
+    createdAt: isoOf(r.creationDate),
+    modifiedAt: isoOf(r.lastModifiedDate)
+  };
+}
+
+// { date: "YYYY-MM-DD", time: "HH:mm" | null } onto the reminder, with an alert
+// at a timed due date the way Reminders.app does it. null clears the due date.
+function setDue(r, due) {
+  each(r.alarms || $.NSArray.array, function (a) { return a; }).forEach(function (a) { r.removeAlarm(a); });
+  if (!due) {
+    r.dueDateComponents = $();
+    return;
+  }
+  var parts = due.date.split('-');
+  var c = $.NSDateComponents.alloc.init;
+  c.year = Number(parts[0]);
+  c.month = Number(parts[1]);
+  c.day = Number(parts[2]);
+  if (due.time) {
+    var t = due.time.split(':');
+    c.hour = Number(t[0]);
+    c.minute = Number(t[1]);
+    var at = $.NSCalendar.currentCalendar.dateFromComponents(c);
+    r.addAlarm($.EKAlarm.alarmWithAbsoluteDate(at));
+  }
+  r.dueDateComponents = c;
+}
+
+var PRIORITY = { none: 0, high: 1, medium: 5, low: 9 };
+
+// Applies { title, notes, due, priority, url } where present, then moves to `list`.
+function apply(r, ch, list) {
+  if (ch.title !== undefined) r.title = ch.title;
+  if (ch.notes !== undefined) r.notes = ch.notes;
+  if (ch.url !== undefined) r.URL = ch.url ? $.NSURL.URLWithString(ch.url) : $();
+  if (ch.priority !== undefined) r.priority = PRIORITY[ch.priority];
+  if (ch.due !== undefined) setDue(r, ch.due);
+  if (list) r.calendar = list;
+}
+
+function save(store, r) {
+  var err = Ref();
+  var ok = store.saveReminderCommitError(r, true, err);
+  if (!ok) {
+    var e = err[0];
+    return fail('SAVE_FAILED', e && !e.isNil() ? unwrap(e.localizedDescription) : 'Reminders refused the change');
+  }
+  return { ok: true };
+}
+
+// EventKit has no public flag, so flags go through Reminders.app scripting.
+// That needs Automation permission and launches Reminders in the background.
+var AUTOMATION =
+  'Flags need Automation access. Allow your terminal (and/or "osascript") to control Reminders in System Settings > Privacy & Security > Automation.';
+
+function appReminder(id) {
+  return Application('Reminders').reminders.byId('x-apple-reminder://' + id);
+}
+
+function automationError(e) {
+  var s = String(e);
+  return /-1743|not allowed|not authori[sz]ed/i.test(s) ? fail('NOT_AUTHORIZED', AUTOMATION) : fail('FLAG_FAILED', s);
+}
+
+// A reminder saved a moment ago can take a beat to reach Reminders.app.
+function setFlag(id, value) {
+  var last;
+  for (var i = 0; i < 20; i++) {
+    try {
+      appReminder(id).flagged = value;
+      return { ok: true };
+    } catch (e) {
+      last = e;
+      if (/-1743|not allowed/i.test(String(e))) break;
+      delay(0.25);
+    }
+  }
+  return automationError(last);
+}
+
+function getFlag(id) {
+  try {
+    return appReminder(id).flagged();
+  } catch (e) {
+    return null;
+  }
+}
+
+function flaggedIds() {
+  try {
+    var ids = Application('Reminders').reminders.whose({ flagged: true }).id();
+    return { ok: true, ids: ids.map(function (s) { return String(s).replace('x-apple-reminder://', ''); }) };
+  } catch (e) {
+    return automationError(e);
+  }
+}

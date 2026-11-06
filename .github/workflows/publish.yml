@@ -1,0 +1,56 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: npm ci
+
+      - name: Check if version changed
+        id: version_check
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view @gopaljigaur/arcli version 2>/dev/null || echo "0.0.0")
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          if [ "$CURRENT" != "$PUBLISHED" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to npm
+        if: steps.version_check.outputs.changed == 'true'
+        run: npm publish --provenance
+
+      - name: Create GitHub release
+        if: steps.version_check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version_check.outputs.current }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "v$VERSION"
+          git push origin "v$VERSION" --force
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --generate-notes

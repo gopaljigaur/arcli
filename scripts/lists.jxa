@@ -1,0 +1,22 @@
+// lists.jxa: every reminder list, with how many open reminders each holds.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  var all = lists(s.store);
+  var open_ = {};
+  if (all.length) {
+    var pred = s.store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars(undefined, undefined, $(all));
+    fetch(s.store, pred).forEach(function (r) {
+      var id = unwrap(r.calendar.calendarIdentifier);
+      open_[id] = (open_[id] || 0) + 1;
+    });
+  }
+  var out = all.map(function (c) {
+    var info = listInfo(c);
+    info.open = open_[info.id] || 0;
+    return info;
+  });
+  out.sort(function (a, b) { return (a.source + '\n' + a.name).localeCompare(b.source + '\n' + b.name); });
+  return JSON.stringify({ ok: true, lists: out });
+})();

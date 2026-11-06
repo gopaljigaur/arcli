@@ -1,0 +1,11 @@
+// reminder.jxa: one reminder by __args.id, flag included.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  var found = findReminder(s.store, __args.id);
+  if (!found.ok) return JSON.stringify(found);
+  var out = serialise(found.reminder);
+  out.flagged = getFlag(out.id);
+  return JSON.stringify({ ok: true, reminder: out });
+})();

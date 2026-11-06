@@ -1,0 +1,30 @@
+// edit.jxa: apply __args.changes to __args.id; __args.list / listId moves it,
+// __args.flagged (true or false) sets the flag, __args.completed marks it done or not.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  var store = s.store;
+  var found = findReminder(store, __args.id);
+  if (!found.ok) return JSON.stringify(found);
+  var r = found.reminder;
+  var list;
+  if (__args.list || __args.listId) {
+    var l = findList(store, __args.list, __args.listId);
+    if (!l.ok) return JSON.stringify(l);
+    list = l.list;
+  }
+  apply(r, __args.changes || {}, list);
+  if (__args.completed !== undefined) r.completed = __args.completed;
+  var saved = save(store, r);
+  if (!saved.ok) return JSON.stringify(saved);
+  var out = serialise(r);
+  if (__args.flagged !== undefined) {
+    var flag = setFlag(out.id, __args.flagged);
+    if (!flag.ok) return JSON.stringify(flag);
+    out.flagged = __args.flagged;
+  } else if (__args.completed === undefined) {
+    out.flagged = getFlag(out.id);
+  }
+  return JSON.stringify({ ok: true, reminder: out });
+})();

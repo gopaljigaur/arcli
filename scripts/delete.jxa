@@ -1,0 +1,15 @@
+// delete.jxa: remove __args.id. The CLI confirms first.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  var found = findReminder(s.store, __args.id);
+  if (!found.ok) return JSON.stringify(found);
+  var gone = serialise(found.reminder);
+  var err = Ref();
+  if (!s.store.removeReminderCommitError(found.reminder, true, err)) {
+    var e = err[0];
+    return JSON.stringify(fail('DELETE_FAILED', e && !e.isNil() ? unwrap(e.localizedDescription) : 'Reminders refused the delete'));
+  }
+  return JSON.stringify({ ok: true, deleted: gone });
+})();

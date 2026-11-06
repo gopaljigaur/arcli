@@ -1,0 +1,32 @@
+// add.jxa: a new reminder from __args { title, list, listId, changes, flagged }.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  var store = s.store;
+  var list;
+  if (__args.list || __args.listId) {
+    var found = findList(store, __args.list, __args.listId);
+    if (!found.ok) return JSON.stringify(found);
+    list = found.list;
+  } else {
+    list = store.defaultCalendarForNewReminders;
+    if (!list || list.isNil()) return JSON.stringify(fail('LIST_NOT_FOUND', 'No default list; pass --list'));
+  }
+  var r = $.EKReminder.reminderWithEventStore(store);
+  r.calendar = list;
+  apply(r, __args.changes);
+  var saved = save(store, r);
+  if (!saved.ok) return JSON.stringify(saved);
+  var out = serialise(r);
+  out.flagged = false;
+  if (__args.flagged) {
+    var flag = setFlag(out.id, true);
+    if (!flag.ok) {
+      flag.error.message = 'Created ' + out.id + ' but could not flag it. ' + flag.error.message;
+      return JSON.stringify(flag);
+    }
+    out.flagged = true;
+  }
+  return JSON.stringify({ ok: true, reminder: out });
+})();

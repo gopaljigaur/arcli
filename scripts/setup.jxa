@@ -1,0 +1,7 @@
+// setup.jxa: trigger the macOS Reminders permission and say how many lists it can see.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  return JSON.stringify({ ok: true, message: 'Reminders access enabled', lists: lists(s.store).length });
+})();

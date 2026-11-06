@@ -1,0 +1,28 @@
+// reminders.jxa: reminders in __args.list / __args.listId (all lists when neither),
+// filtered by __args.completed: "exclude" | "include" | "only". Due filtering is in lib/cli.js.
+
+(function () {
+  var s = open();
+  if (!s.ok) return JSON.stringify(s);
+  var store = s.store;
+  var chosen = lists(store);
+  if (__args.list || __args.listId) {
+    var found = findList(store, __args.list, __args.listId);
+    if (!found.ok) return JSON.stringify(found);
+    chosen = [found.list];
+  }
+  if (!chosen.length) return JSON.stringify({ ok: true, reminders: [] });
+  var cals = $(chosen);
+  var pred;
+  if (__args.completed === 'only') pred = store.predicateForCompletedRemindersWithCompletionDateStartingEndingCalendars(undefined, undefined, cals);
+  else if (__args.completed === 'include') pred = store.predicateForRemindersInCalendars(cals);
+  else pred = store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars(undefined, undefined, cals);
+  var out = fetch(store, pred).map(serialise);
+  if (__args.flagged) {
+    var f = flaggedIds();
+    if (!f.ok) return JSON.stringify(f);
+    out = out.filter(function (r) { return f.ids.indexOf(r.id) !== -1; });
+    out.forEach(function (r) { r.flagged = true; });
+  }
+  return JSON.stringify({ ok: true, reminders: out });
+})();
