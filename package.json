@@ -22,9 +22,6 @@
   },
   "author": "Gopalji Gaur <gopaljigaur@gmail.com>",
   "license": "MIT",
-  "os": [
-    "darwin"
-  ],
   "engines": {
     "node": ">=18"
   },
